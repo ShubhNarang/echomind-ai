@@ -1,1 +1,10 @@
 project_id = "xuojrytaiqcylrarsuie"
+
+[functions.process-memory]
+verify_jwt = false
+
+[functions.chat]
+verify_jwt = false
+
+[functions.review-memories]
+verify_jwt = false

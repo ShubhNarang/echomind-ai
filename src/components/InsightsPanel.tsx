@@ -49,9 +49,7 @@ export function InsightsPanel() {
     if (!user) return;
     setReviewing(true);
     try {
-      await supabase.functions.invoke("review-memories", {
-        body: { userId: user.id },
-      });
+      await supabase.functions.invoke("review-memories");
       // Refresh memories after review
       const { data } = await supabase
         .from("memories")
