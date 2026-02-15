@@ -89,6 +89,7 @@ export type Database = {
           created_at: string
           embedding: string | null
           id: string
+          image_url: string | null
           importance: number | null
           keywords: string[] | null
           summary: string | null
@@ -102,6 +103,7 @@ export type Database = {
           created_at?: string
           embedding?: string | null
           id?: string
+          image_url?: string | null
           importance?: number | null
           keywords?: string[] | null
           summary?: string | null
@@ -115,6 +117,7 @@ export type Database = {
           created_at?: string
           embedding?: string | null
           id?: string
+          image_url?: string | null
           importance?: number | null
           keywords?: string[] | null
           summary?: string | null

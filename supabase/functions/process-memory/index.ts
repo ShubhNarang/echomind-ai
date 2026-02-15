@@ -10,20 +10,42 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { memoryId } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+    const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
+    // Verify the user
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const token = authHeader.replace("Bearer ", "");
+    const { data: claimsData, error: claimsError } = await userClient.auth.getClaims(token);
+    if (claimsError || !claimsData?.claims) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const userId = claimsData.claims.sub;
+
+    const { memoryId } = await req.json();
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Fetch the memory
+    // Fetch the memory and verify ownership
     const { data: memory, error: fetchError } = await supabase
       .from("memories")
       .select("*")
       .eq("id", memoryId)
+      .eq("user_id", userId)
       .single();
 
     if (fetchError || !memory) {
@@ -81,8 +103,7 @@ Return ONLY valid JSON, no markdown or explanation.`,
     });
 
     if (!aiResponse.ok) {
-      const errText = await aiResponse.text();
-      console.error("AI error:", aiResponse.status, errText);
+      console.error("AI processing failed with status:", aiResponse.status);
       return new Response(JSON.stringify({ error: "AI processing failed" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -94,7 +115,6 @@ Return ONLY valid JSON, no markdown or explanation.`,
     if (toolCall) {
       processed = JSON.parse(toolCall.function.arguments);
     } else {
-      // Fallback: try parsing content directly
       const content = aiData.choices?.[0]?.message?.content || "{}";
       processed = JSON.parse(content);
     }
@@ -117,7 +137,7 @@ Return ONLY valid JSON, no markdown or explanation.`,
       const embData = await embeddingResponse.json();
       embedding = embData.data?.[0]?.embedding || null;
     } else {
-      console.error("Embedding error:", await embeddingResponse.text());
+      console.error("Embedding generation failed");
     }
 
     // Update the memory
@@ -135,10 +155,11 @@ Return ONLY valid JSON, no markdown or explanation.`,
     const { error: updateError } = await supabase
       .from("memories")
       .update(updateData)
-      .eq("id", memoryId);
+      .eq("id", memoryId)
+      .eq("user_id", userId);
 
     if (updateError) {
-      console.error("Update error:", updateError);
+      console.error("Failed to update memory");
       return new Response(JSON.stringify({ error: "Failed to update memory" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -148,8 +169,8 @@ Return ONLY valid JSON, no markdown or explanation.`,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
-    console.error("process-memory error:", e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }), {
+    console.error("process-memory error occurred");
+    return new Response(JSON.stringify({ error: "An error occurred" }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }

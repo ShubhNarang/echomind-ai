@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
@@ -8,10 +8,22 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star } from "lucide-react";
-import type { Tables } from "@/integrations/supabase/types";
+import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star, Image as ImageIcon } from "lucide-react";
 
-type Memory = Tables<"memories">;
+interface Memory {
+  id: string;
+  user_id: string;
+  content: string;
+  summary: string | null;
+  keywords: string[] | null;
+  tags: string[] | null;
+  importance: number | null;
+  ai_insight: string | null;
+  image_url: string | null;
+  embedding: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export function MemorySidebar() {
   const { user } = useAuth();
@@ -20,9 +32,12 @@ export function MemorySidebar() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [newContent, setNewContent] = useState("");
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchMemories = async () => {
     if (!user) return;
@@ -34,7 +49,7 @@ export function MemorySidebar() {
     if (error) {
       toast.error("Failed to load memories");
     } else {
-      setMemories(data || []);
+      setMemories((data as Memory[]) || []);
     }
   };
 
@@ -42,41 +57,91 @@ export function MemorySidebar() {
     fetchMemories();
   }, [user]);
 
+  const uploadImage = async (file: File): Promise<string | null> => {
+    if (!user) return null;
+    const ext = file.name.split(".").pop();
+    const path = `${user.id}/${crypto.randomUUID()}.${ext}`;
+    const { error } = await supabase.storage
+      .from("memory-images")
+      .upload(path, file);
+    if (error) {
+      toast.error("Failed to upload image");
+      return null;
+    }
+    const { data: urlData } = supabase.storage
+      .from("memory-images")
+      .getPublicUrl(path);
+    return urlData.publicUrl;
+  };
+
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image must be under 5MB");
+      return;
+    }
+    setSelectedImage(file);
+    setImagePreview(URL.createObjectURL(file));
+  };
+
   const handleAdd = async () => {
-    if (!user || !newContent.trim()) return;
+    if (!user || (!newContent.trim() && !selectedImage)) return;
     setSaving(true);
+
+    let imageUrl: string | null = null;
+    if (selectedImage) {
+      imageUrl = await uploadImage(selectedImage);
+    }
+
     const { data, error } = await supabase
       .from("memories")
-      .insert({ user_id: user.id, content: newContent.trim() })
+      .insert({
+        user_id: user.id,
+        content: newContent.trim() || "(Image memory)",
+        image_url: imageUrl,
+      } as any)
       .select()
       .single();
 
     if (error) {
       toast.error("Failed to save memory");
     } else {
-      setMemories((prev) => [data, ...prev]);
+      setMemories((prev) => [data as Memory, ...prev]);
       setNewContent("");
+      setSelectedImage(null);
+      setImagePreview(null);
       setShowAdd(false);
       toast.success("Memory saved! AI is processing...");
-      // Trigger AI processing
       try {
         await supabase.functions.invoke("process-memory", {
           body: { memoryId: data.id },
         });
         fetchMemories();
       } catch {
-        // AI processing is async, memory is still saved
+        // AI processing is async
       }
     }
     setSaving(false);
   };
 
-  const handleDelete = async (id: string) => {
-    const { error } = await supabase.from("memories").delete().eq("id", id);
+  const handleDelete = async (memory: Memory) => {
+    // Delete image from storage if exists
+    if (memory.image_url) {
+      const path = memory.image_url.split("/memory-images/")[1];
+      if (path) {
+        await supabase.storage.from("memory-images").remove([path]);
+      }
+    }
+    const { error } = await supabase.from("memories").delete().eq("id", memory.id);
     if (error) {
       toast.error("Failed to delete");
     } else {
-      setMemories((prev) => prev.filter((m) => m.id !== id));
+      setMemories((prev) => prev.filter((m) => m.id !== memory.id));
       toast.success("Memory deleted");
     }
   };
@@ -147,9 +212,47 @@ export function MemorySidebar() {
                 className="mb-2 bg-secondary/50 border-border/30 resize-none"
                 rows={3}
               />
+              
+              {/* Image preview */}
+              {imagePreview && (
+                <div className="relative mb-2 rounded-md overflow-hidden">
+                  <img src={imagePreview} alt="Preview" className="w-full h-24 object-cover rounded-md" />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="absolute top-1 right-1 h-6 w-6 bg-background/80"
+                    onClick={() => {
+                      setSelectedImage(null);
+                      setImagePreview(null);
+                    }}
+                  >
+                    <X className="w-3 h-3" />
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex gap-1 mb-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleImageSelect}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-xs"
+                >
+                  <ImageIcon className="w-3 h-3 mr-1" />
+                  Add Image
+                </Button>
+              </div>
+
               <Button
                 onClick={handleAdd}
-                disabled={saving || !newContent.trim()}
+                disabled={saving || (!newContent.trim() && !selectedImage)}
                 className="w-full glow-primary"
                 size="sm"
               >
@@ -220,6 +323,16 @@ export function MemorySidebar() {
                   </div>
                 ) : (
                   <>
+                    {/* Memory image */}
+                    {memory.image_url && (
+                      <img
+                        src={memory.image_url}
+                        alt="Memory"
+                        className="w-full h-20 object-cover rounded-md mb-2"
+                        loading="lazy"
+                      />
+                    )}
+
                     <p className="text-sm text-foreground line-clamp-2">
                       {memory.summary || memory.content}
                     </p>
@@ -265,7 +378,7 @@ export function MemorySidebar() {
                           size="icon"
                           variant="ghost"
                           className="h-6 w-6 hover:text-destructive"
-                          onClick={() => handleDelete(memory.id)}
+                          onClick={() => handleDelete(memory)}
                         >
                           <Trash2 className="w-3 h-3" />
                         </Button>
