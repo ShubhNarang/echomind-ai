@@ -25,9 +25,22 @@ interface Memory {
   updated_at: string;
 }
 
+const getSignedImageUrl = async (imageUrl: string): Promise<string | null> => {
+  const parts = imageUrl.split("/memory-images/");
+  if (parts.length < 2) return null;
+  // Handle both public URLs and signed URLs - extract the path
+  const path = parts[1].split("?")[0];
+  const { data, error } = await supabase.storage
+    .from("memory-images")
+    .createSignedUrl(path, 3600);
+  if (error || !data?.signedUrl) return null;
+  return data.signedUrl;
+};
+
 export function MemorySidebar() {
   const { user } = useAuth();
   const [memories, setMemories] = useState<Memory[]>([]);
+  const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -39,6 +52,19 @@ export function MemorySidebar() {
   const [editContent, setEditContent] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const resolveSignedUrls = async (mems: Memory[]) => {
+    const urls: Record<string, string> = {};
+    await Promise.all(
+      mems
+        .filter((m) => m.image_url)
+        .map(async (m) => {
+          const signed = await getSignedImageUrl(m.image_url!);
+          if (signed) urls[m.id] = signed;
+        })
+    );
+    setSignedUrls(urls);
+  };
+
   const fetchMemories = async () => {
     if (!user) return;
     const { data, error } = await supabase
@@ -49,7 +75,9 @@ export function MemorySidebar() {
     if (error) {
       toast.error("Failed to load memories");
     } else {
-      setMemories((data as Memory[]) || []);
+      const mems = (data as Memory[]) || [];
+      setMemories(mems);
+      resolveSignedUrls(mems);
     }
   };
 
@@ -68,10 +96,14 @@ export function MemorySidebar() {
       toast.error("Failed to upload image");
       return null;
     }
-    const { data: urlData } = supabase.storage
+    const { data: urlData, error: urlError } = await supabase.storage
       .from("memory-images")
-      .getPublicUrl(path);
-    return urlData.publicUrl;
+      .createSignedUrl(path, 3600);
+    if (urlError || !urlData?.signedUrl) {
+      toast.error("Failed to get image URL");
+      return null;
+    }
+    return urlData.signedUrl;
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -132,7 +164,7 @@ export function MemorySidebar() {
   const handleDelete = async (memory: Memory) => {
     // Delete image from storage if exists
     if (memory.image_url) {
-      const path = memory.image_url.split("/memory-images/")[1];
+      const path = memory.image_url.split("/memory-images/")[1]?.split("?")[0];
       if (path) {
         await supabase.storage.from("memory-images").remove([path]);
       }
@@ -324,9 +356,9 @@ export function MemorySidebar() {
                 ) : (
                   <>
                     {/* Memory image */}
-                    {memory.image_url && (
+                    {memory.image_url && signedUrls[memory.id] && (
                       <img
-                        src={memory.image_url}
+                        src={signedUrls[memory.id]}
                         alt="Memory"
                         className="w-full h-20 object-cover rounded-md mb-2"
                         loading="lazy"
