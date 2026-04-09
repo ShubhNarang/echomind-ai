@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { MemoryImageViewer } from "@/components/MemoryImageViewer";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star, Image as ImageIcon } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star, Image as ImageIcon, ExternalLink } from "lucide-react";
 
 interface Memory {
   id: string;
@@ -38,6 +40,7 @@ const getSignedImageUrl = async (imageUrl: string): Promise<string | null> => {
 };
 
 export function MemorySidebar() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
