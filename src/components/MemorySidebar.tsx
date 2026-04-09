@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { MemoryImageViewer } from "@/components/MemoryImageViewer";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star, Image as ImageIcon } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star, Image as ImageIcon, ExternalLink } from "lucide-react";
 
 interface Memory {
   id: string;
@@ -38,6 +40,7 @@ const getSignedImageUrl = async (imageUrl: string): Promise<string | null> => {
 };
 
 export function MemorySidebar() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [memories, setMemories] = useState<Memory[]>([]);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
@@ -218,6 +221,16 @@ export function MemorySidebar() {
             <Brain className="w-5 h-5 text-primary" />
             <h2 className="font-semibold text-lg tracking-tight">Memories</h2>
           </div>
+          <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => navigate("/memories")}
+              className="hover:bg-primary/10 hover:text-primary h-8 w-8"
+              title="Open Memory Manager"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </Button>
           <Button
             size="icon"
             variant="ghost"
@@ -226,6 +239,7 @@ export function MemorySidebar() {
           >
             {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
           </Button>
+          </div>
         </div>
 
         {/* Add Memory */}
@@ -357,11 +371,9 @@ export function MemorySidebar() {
                   <>
                     {/* Memory image */}
                     {memory.image_url && signedUrls[memory.id] && (
-                      <img
+                      <MemoryImageViewer
                         src={signedUrls[memory.id]}
-                        alt="Memory"
-                        className="w-full h-20 object-cover rounded-md mb-2"
-                        loading="lazy"
+                        thumbnailClassName="w-full h-20 object-cover rounded-md mb-2"
                       />
                     )}
 
