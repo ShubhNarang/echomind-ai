@@ -371,11 +371,9 @@ export function MemorySidebar() {
                   <>
                     {/* Memory image */}
                     {memory.image_url && signedUrls[memory.id] && (
-                      <img
+                      <MemoryImageViewer
                         src={signedUrls[memory.id]}
-                        alt="Memory"
-                        className="w-full h-20 object-cover rounded-md mb-2"
-                        loading="lazy"
+                        thumbnailClassName="w-full h-20 object-cover rounded-md mb-2"
                       />
                     )}
 
