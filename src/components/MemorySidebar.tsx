@@ -240,6 +240,7 @@ export function MemorySidebar() {
             {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
           </Button>
           </div>
+        </div>
 
         {/* Add Memory */}
         <AnimatePresence>
