@@ -10,27 +10,17 @@ import { MemoryImageViewer } from "@/components/MemoryImageViewer";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { useNavigate } from "react-router-dom";
-import { Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star, Image as ImageIcon, ExternalLink } from "lucide-react";
+import {
+  Plus, Search, X, Brain, Trash2, Edit2, Loader2, Star,
+  Image as ImageIcon, ExternalLink, Tag, ChevronDown, ChevronRight,
+} from "lucide-react";
+import type { Tables } from "@/integrations/supabase/types";
 
-interface Memory {
-  id: string;
-  user_id: string;
-  content: string;
-  summary: string | null;
-  keywords: string[] | null;
-  tags: string[] | null;
-  importance: number | null;
-  ai_insight: string | null;
-  image_url: string | null;
-  embedding: string | null;
-  created_at: string;
-  updated_at: string;
-}
+type Memory = Tables<"memories">;
 
 const getSignedImageUrl = async (imageUrl: string): Promise<string | null> => {
   const parts = imageUrl.split("/memory-images/");
   if (parts.length < 2) return null;
-  // Handle both public URLs and signed URLs - extract the path
   const path = parts[1].split("?")[0];
   const { data, error } = await supabase.storage
     .from("memory-images")
@@ -53,6 +43,8 @@ export function MemorySidebar() {
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
+  const [groupByTags, setGroupByTags] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const resolveSignedUrls = async (mems: Memory[]) => {
@@ -76,9 +68,10 @@ export function MemorySidebar() {
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
     if (error) {
+      console.error("Failed to load memories:", error);
       toast.error("Failed to load memories");
     } else {
-      const mems = (data as Memory[]) || [];
+      const mems = data || [];
       setMemories(mems);
       resolveSignedUrls(mems);
     }
@@ -96,17 +89,14 @@ export function MemorySidebar() {
       .from("memory-images")
       .upload(path, file);
     if (error) {
+      console.error("Upload error:", error);
       toast.error("Failed to upload image");
       return null;
     }
-    const { data: urlData, error: urlError } = await supabase.storage
+    const { data: urlData } = await supabase.storage
       .from("memory-images")
       .createSignedUrl(path, 3600);
-    if (urlError || !urlData?.signedUrl) {
-      toast.error("Failed to get image URL");
-      return null;
-    }
-    return urlData.signedUrl;
+    return urlData?.signedUrl || null;
   };
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -139,33 +129,34 @@ export function MemorySidebar() {
         user_id: user.id,
         content: newContent.trim() || "(Image memory)",
         image_url: imageUrl,
-      } as any)
+      })
       .select()
       .single();
 
     if (error) {
-      toast.error("Failed to save memory");
-    } else {
-      setMemories((prev) => [data as Memory, ...prev]);
+      console.error("Insert error:", error);
+      toast.error("Failed to save memory: " + error.message);
+    } else if (data) {
+      setMemories((prev) => [data, ...prev]);
       setNewContent("");
       setSelectedImage(null);
       setImagePreview(null);
       setShowAdd(false);
       toast.success("Memory saved! AI is processing...");
       try {
+        const { data: session } = await supabase.auth.getSession();
         await supabase.functions.invoke("process-memory", {
           body: { memoryId: data.id },
         });
         fetchMemories();
-      } catch {
-        // AI processing is async
+      } catch (e) {
+        console.error("Process memory error:", e);
       }
     }
     setSaving(false);
   };
 
   const handleDelete = async (memory: Memory) => {
-    // Delete image from storage if exists
     if (memory.image_url) {
       const path = memory.image_url.split("/memory-images/")[1]?.split("?")[0];
       if (path) {
@@ -201,16 +192,135 @@ export function MemorySidebar() {
     }
   };
 
+  const toggleGroup = (tag: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      next.has(tag) ? next.delete(tag) : next.add(tag);
+      return next;
+    });
+  };
+
   const allTags = Array.from(new Set(memories.flatMap((m) => m.tags || [])));
 
   const filtered = memories.filter((m) => {
     const matchesSearch =
       !search ||
       m.content.toLowerCase().includes(search.toLowerCase()) ||
-      m.summary?.toLowerCase().includes(search.toLowerCase());
+      m.summary?.toLowerCase().includes(search.toLowerCase()) ||
+      m.keywords?.some((k) => k.toLowerCase().includes(search.toLowerCase()));
     const matchesTag = !tagFilter || (m.tags || []).includes(tagFilter);
     return matchesSearch && matchesTag;
   });
+
+  // Group memories by their first tag
+  const groupedByTag = (() => {
+    const groups: Record<string, Memory[]> = {};
+    const ungrouped: Memory[] = [];
+    filtered.forEach((m) => {
+      if (m.tags && m.tags.length > 0) {
+        m.tags.forEach((tag) => {
+          if (!groups[tag]) groups[tag] = [];
+          if (!groups[tag].find((existing) => existing.id === m.id)) {
+            groups[tag].push(m);
+          }
+        });
+      } else {
+        ungrouped.push(m);
+      }
+    });
+    return { groups, ungrouped };
+  })();
+
+  const renderMemoryCard = (memory: Memory) => (
+    <motion.div
+      key={memory.id}
+      layout
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      className="glass rounded-lg p-3 group hover:border-primary/30 transition-colors"
+    >
+      {editingId === memory.id ? (
+        <div>
+          <Textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            className="mb-2 bg-secondary/50 border-border/30 resize-none text-sm"
+            rows={3}
+          />
+          <div className="flex gap-1">
+            <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={() => handleEdit(memory.id)}>
+              Save
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {memory.image_url && signedUrls[memory.id] && (
+            <MemoryImageViewer
+              src={signedUrls[memory.id]}
+              thumbnailClassName="w-full h-20 object-cover rounded-md mb-2"
+            />
+          )}
+
+          <p className="text-sm text-foreground line-clamp-2">
+            {memory.summary || memory.content}
+          </p>
+
+          {memory.importance && (
+            <div className="flex items-center gap-1 mt-1.5">
+              <Star className="w-3 h-3 text-primary" />
+              <span className="text-xs text-muted-foreground">{memory.importance}/10</span>
+            </div>
+          )}
+
+          {memory.tags && memory.tags.length > 0 && !groupByTags && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {memory.tags.map((tag) => (
+                <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+          )}
+
+          {memory.ai_insight && (
+            <p className="text-xs text-accent mt-1.5 italic">💡 {memory.ai_insight}</p>
+          )}
+
+          <div className="flex items-center justify-between mt-2">
+            <span className="text-[10px] text-muted-foreground">
+              {new Date(memory.created_at).toLocaleDateString()}
+            </span>
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6"
+                onClick={() => {
+                  setEditingId(memory.id);
+                  setEditContent(memory.content);
+                }}
+              >
+                <Edit2 className="w-3 h-3" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6 hover:text-destructive"
+                onClick={() => handleDelete(memory)}
+              >
+                <Trash2 className="w-3 h-3" />
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </motion.div>
+  );
 
   return (
     <div className="h-full flex flex-col bg-sidebar border-r border-sidebar-border">
@@ -220,8 +330,18 @@ export function MemorySidebar() {
           <div className="flex items-center gap-2">
             <Brain className="w-5 h-5 text-primary" />
             <h2 className="font-semibold text-lg tracking-tight">Memories</h2>
+            <Badge variant="secondary" className="text-[10px]">{memories.length}</Badge>
           </div>
           <div className="flex items-center gap-1">
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setGroupByTags(!groupByTags)}
+              className={`h-8 w-8 ${groupByTags ? "text-primary bg-primary/10" : "hover:bg-primary/10 hover:text-primary"}`}
+              title="Group by tags"
+            >
+              <Tag className="w-4 h-4" />
+            </Button>
             <Button
               size="icon"
               variant="ghost"
@@ -231,14 +351,14 @@ export function MemorySidebar() {
             >
               <ExternalLink className="w-4 h-4" />
             </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => setShowAdd(!showAdd)}
-            className="hover:bg-primary/10 hover:text-primary"
-          >
-            {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => setShowAdd(!showAdd)}
+              className="hover:bg-primary/10 hover:text-primary"
+            >
+              {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            </Button>
           </div>
         </div>
 
@@ -258,8 +378,7 @@ export function MemorySidebar() {
                 className="mb-2 bg-secondary/50 border-border/30 resize-none"
                 rows={3}
               />
-              
-              {/* Image preview */}
+
               {imagePreview && (
                 <div className="relative mb-2 rounded-md overflow-hidden">
                   <img src={imagePreview} alt="Preview" className="w-full h-24 object-cover rounded-md" />
@@ -321,8 +440,15 @@ export function MemorySidebar() {
         </div>
 
         {/* Tag filters */}
-        {allTags.length > 0 && (
+        {allTags.length > 0 && !groupByTags && (
           <div className="flex flex-wrap gap-1 mt-2">
+            <Badge
+              variant={tagFilter === null ? "default" : "secondary"}
+              className="cursor-pointer text-xs"
+              onClick={() => setTagFilter(null)}
+            >
+              All
+            </Badge>
             {allTags.slice(0, 8).map((tag) => (
               <Badge
                 key={tag}
@@ -340,99 +466,61 @@ export function MemorySidebar() {
       {/* Memory List */}
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-2">
-          <AnimatePresence>
-            {filtered.map((memory) => (
-              <motion.div
-                key={memory.id}
-                layout
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                className="glass rounded-lg p-3 group hover:border-primary/30 transition-colors"
-              >
-                {editingId === memory.id ? (
-                  <div>
-                    <Textarea
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      className="mb-2 bg-secondary/50 border-border/30 resize-none text-sm"
-                      rows={3}
-                    />
-                    <div className="flex gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
-                        Cancel
-                      </Button>
-                      <Button size="sm" onClick={() => handleEdit(memory.id)}>
-                        Save
-                      </Button>
-                    </div>
+          {groupByTags ? (
+            <>
+              {Object.entries(groupedByTag.groups)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([tag, tagMemories]) => (
+                  <div key={tag} className="space-y-1.5">
+                    <button
+                      onClick={() => toggleGroup(tag)}
+                      className="flex items-center gap-1.5 w-full text-left px-1 py-1 rounded hover:bg-secondary/50 transition-colors"
+                    >
+                      {collapsedGroups.has(tag) ? (
+                        <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+                      )}
+                      <Tag className="w-3 h-3 text-primary" />
+                      <span className="text-xs font-medium text-foreground capitalize">{tag}</span>
+                      <Badge variant="secondary" className="text-[10px] ml-auto px-1.5 py-0">
+                        {tagMemories.length}
+                      </Badge>
+                    </button>
+                    <AnimatePresence>
+                      {!collapsedGroups.has(tag) && (
+                        <motion.div
+                          initial={{ height: 0, opacity: 0 }}
+                          animate={{ height: "auto", opacity: 1 }}
+                          exit={{ height: 0, opacity: 0 }}
+                          className="space-y-2 pl-2 overflow-hidden"
+                        >
+                          {tagMemories.map(renderMemoryCard)}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
-                ) : (
-                  <>
-                    {/* Memory image */}
-                    {memory.image_url && signedUrls[memory.id] && (
-                      <MemoryImageViewer
-                        src={signedUrls[memory.id]}
-                        thumbnailClassName="w-full h-20 object-cover rounded-md mb-2"
-                      />
-                    )}
-
-                    <p className="text-sm text-foreground line-clamp-2">
-                      {memory.summary || memory.content}
-                    </p>
-
-                    {memory.importance && (
-                      <div className="flex items-center gap-1 mt-1.5">
-                        <Star className="w-3 h-3 text-primary" />
-                        <span className="text-xs text-muted-foreground">{memory.importance}/10</span>
-                      </div>
-                    )}
-
-                    {memory.tags && memory.tags.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {memory.tags.map((tag) => (
-                          <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                            {tag}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-
-                    {memory.ai_insight && (
-                      <p className="text-xs text-accent mt-1.5 italic">💡 {memory.ai_insight}</p>
-                    )}
-
-                    <div className="flex items-center justify-between mt-2">
-                      <span className="text-[10px] text-muted-foreground">
-                        {new Date(memory.created_at).toLocaleDateString()}
-                      </span>
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-6 w-6"
-                          onClick={() => {
-                            setEditingId(memory.id);
-                            setEditContent(memory.content);
-                          }}
-                        >
-                          <Edit2 className="w-3 h-3" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-6 w-6 hover:text-destructive"
-                          onClick={() => handleDelete(memory)}
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </motion.div>
-            ))}
-          </AnimatePresence>
+                ))}
+              {groupedByTag.ungrouped.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 px-1 py-1">
+                    <Tag className="w-3 h-3 text-muted-foreground" />
+                    <span className="text-xs font-medium text-muted-foreground">Untagged</span>
+                    <Badge variant="secondary" className="text-[10px] ml-auto px-1.5 py-0">
+                      {groupedByTag.ungrouped.length}
+                    </Badge>
+                  </div>
+                  <div className="space-y-2 pl-2">
+                    {groupedByTag.ungrouped.map(renderMemoryCard)}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <AnimatePresence>
+              {filtered.map(renderMemoryCard)}
+            </AnimatePresence>
+          )}
 
           {filtered.length === 0 && (
             <div className="text-center py-8 text-muted-foreground">
